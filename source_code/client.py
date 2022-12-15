@@ -50,9 +50,6 @@ def send_requests(headers):
 
             if command.startswith('send_mail'):
                 send_mail(user_header)
-                # wait for yes/no from client to see if the user exists
-                print('Mail successfully sent')
-
             elif command == 'exit':
                 user_header['command'] = command  
                 send(user_header)                

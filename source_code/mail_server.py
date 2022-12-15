@@ -7,7 +7,6 @@ import time
 from zeroconf import IPVersion, ServiceInfo, ServiceBrowser, Zeroconf
 from queue import Queue
 
-
 # constants
 FORMAT = 'UTF-8'
 PEER_PORT = 5052
@@ -37,7 +36,7 @@ local_socket.setblocking(False)
 local_socket.bind(('127.0.0.1', 16019))
 local_socket.listen(socket.SOMAXCONN)
 
-
+stop_thread = False
 output_message_queue = Queue(maxsize = MAX_QUEUE_SIZE)
 input_mails = []
 
@@ -67,9 +66,7 @@ class MyListener:
 
         # # add this ip address to the list of tuples(ipaddr),also keep track of ping messages from peers
         # hostname is same for both those machines
-        if(ipaddr == host_name):
-            print("But that's me!!")
-        else:
+        if(ipaddr != host_name):
             # what about port?
             print("\nService %s added, service info: %s\n" % (name, info))
             peers.append([ipaddr, port])
@@ -81,15 +78,15 @@ class MyListener:
 
 zeroconf = Zeroconf()
 listener = MyListener()
-browser = ServiceBrowser(zeroconf, "_Jay_p2pchat._udp.local.", listener)
+browser = ServiceBrowser(zeroconf, "_OUR_p2pmail._udp.local.", listener)
 
 if __name__ == '__main__':
     ip_version = IPVersion.V4Only
 
     desc = {}
     info = ServiceInfo(
-        "_Jay_p2pchat._udp.local.",
-        "Jay's chat server " + socket.gethostname() + "._p2pchat._udp.local.",
+        "_OUR_p2pmail._udp.local.",
+        "OUR Mail Server " + socket.gethostname() + "._p2pmail._udp.local.",
         addresses=[socket.inet_aton(host_name)],
         port=PEER_PORT,
         properties=desc,
@@ -97,6 +94,8 @@ if __name__ == '__main__':
     )
     zeroconf = Zeroconf(ip_version=ip_version)
     zeroconf.register_service(info)
+
+
 
 
 # keep track of sockets to listen data from
@@ -132,23 +131,21 @@ def dequeue_mail(mail_id):
 
 def put_mails_into_inboxes():
     while True:
+        global stop_thread
+
+        if stop_thread:
+            break 
+        
+        time.sleep(10)
+
         if not output_message_queue.empty():
-            
             new_mail = output_message_queue.get()
-            # check who it belongs to 
-            # and add it to the inbox
-            print('dequeuing - ', new_mail)
+            print('Dequeu - ing -', new_mail, ' from the queue')
             client = find_user(new_mail['to'])
-            # clients.remove(client)
 
             client['inbox'].append(new_mail)
 
-            # clients.append(client)
-
-            print(clients)
-
         else:
-            # print('going to sleep/.....')
             time.sleep(1)
 
 
@@ -157,8 +154,6 @@ def print_clients():
         print(client['username'])
 
 def fetch_mails(user):
-    # return the formatted list
-
     mails = '---------------'
     client = find_user(user)
     client_inbox = client['inbox']
@@ -172,14 +167,13 @@ def fetch_mails(user):
 
 
 def run_mail_server():
-
-
     try:
-        # join the chatroom and wait to receive the messages
-        thread = threading.Thread(target = put_mails_into_inboxes, args=())
-        thread.start()
         current_num_clients = 0
         mail_id = 0
+        
+        thread = threading.Thread(target = put_mails_into_inboxes, args=())
+        thread.start()
+
         print("Listening on interface " + host_name + ', ' + str(PEER_PORT))
         while inputs:
             try:
@@ -193,8 +187,6 @@ def run_mail_server():
                     if source is server_socket:
                         data, addr = source.recvfrom(1024)
                         
-                        print("heard from a peer:")
-
                         #only accept msgs with command attribute
                         try:
                             peer = find_peer(addr)
@@ -204,20 +196,23 @@ def run_mail_server():
                                 command = data_received['command']
                                 user = data_received['to']
                                 
-                                print(data_received)
                                 match command:
-                                    case 'receive_mail':
+                                    case 'receive_mail':    
+
                                         from_user = data_received['from']
                                         to_user = data_received['to']
                                         subject = data_received['subject']
                                         body = data_received['body']
 
                                         mail = {'from': from_user, 'to': to_user, 'subject': subject, 'body': body}
-                                        
+
+                                        print('\n-------\nMail has been received: ')
+                                        print('Adding ', mail, ' to the queue')     
+
                                         if not output_message_queue.full():
                                             output_message_queue.put_nowait(mail)
                                         else:
-                                            print('Queue is full')
+                                            print('Client will have to wait; Queue is full')
 
                                     case 'is_user_connected':
                                         reply = ''
@@ -264,7 +259,6 @@ def run_mail_server():
                         data_received = source.recv(1024)
                         if data_received:
                             decode_data = json.loads(data_received.decode(FORMAT))
-                            print(decode_data)
                             
                             user = decode_data['username']
                             command = decode_data['command']
@@ -285,14 +279,24 @@ def run_mail_server():
                                         mail['mail_id'] = mail_id
 
                                         if mail:
-                                            input_mails.append(mail)
-                                            for peer in peers:
-                                                addrtuple = (peer[0], peer[1])
-                                                is_client_connected = {'to': mail['to'], 'command': 'is_user_connected', 'mail_id': mail_id}
-                                                server_socket.sendto(str.encode(json.dumps(is_client_connected)), addrtuple)
+                                            print(mail)
+                                            to_user = find_user(mail['to'])
+                                            if to_user:
+                                                if not output_message_queue.full():
+                                                    print('Mail has been received: ')
+                                                    print('Adding ', mail, ' to the queue')
+                                                    output_message_queue.put_nowait(mail)
+                                                else:
+                                                    print('Queue is full')
+                                            else:
+                                                input_mails.append(mail)
 
-                                    case 'pull_mails':
-                                        
+                                                for peer in peers:
+                                                    addrtuple = (peer[0], peer[1])
+                                                    is_client_connected = {'to': mail['to'], 'command': 'is_user_connected', 'mail_id': mail_id}
+                                                    server_socket.sendto(str.encode(json.dumps(is_client_connected)), addrtuple)
+
+                                    case 'pull_mails':     
                                         data_send = fetch_mails(user)
                                         source.send(str.encode(data_send))
 
@@ -329,9 +333,11 @@ def run_mail_server():
     # unregister the service
     finally:
         print("Unregistering...")
-        thread.join()
         zeroconf.unregister_service(info)
         zeroconf.close()
+        global stop_thread
+        stop_thread = True
+        thread.join()
 
 
 run_mail_server()
