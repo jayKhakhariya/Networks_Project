@@ -62,10 +62,8 @@ class MyListener:
         ipaddr = socket.inet_ntoa(info.addresses[0])
     
         port = info.port
-        # print("Adding " + ipaddr + 'and ' + int(port) +" to the list\n")
 
-        # # add this ip address to the list of tuples(ipaddr),also keep track of ping messages from peers
-        # hostname is same for both those machines
+        # don't add yourself
         if(ipaddr != host_name):
             # what about port?
             print("\nService %s added, service info: %s\n" % (name, info))
@@ -102,13 +100,14 @@ if __name__ == '__main__':
 inputs = [server_socket, local_socket]
 outputs = []  # None
 
-
+# find the peer in a list of peers with the addr tuple
 def find_peer(addr):
     for peer in peers:
         if(peer[0] == addr[0] and peer[1] == addr[1]):
             return peer
     return None 
 
+# find the user among active/inactive clients
 def find_user(user):
     for client in clients:
         if client['username'] == user:
@@ -116,12 +115,14 @@ def find_user(user):
 
     return None
 
+# add the username when a client joins the service
 def add_username(source, user, current_num_clients):
     if current_num_clients < MAX_CLIENTS_CONNECTED:
         new_client = {'username': user, 'connection': source, 'inbox': []}
         clients.append(new_client)
         current_num_clients += 1    
 
+# dequeue the mail once the mail's receiving server has been found
 def dequeue_mail(mail_id):
     for mail in input_mails:
         if mail_id == mail['mail_id']:
@@ -129,6 +130,7 @@ def dequeue_mail(mail_id):
             return mail
     return None
 
+# dequeue from the queue to put mails into mailboxes
 def put_mails_into_inboxes():
     while True:
         global stop_thread
@@ -153,6 +155,7 @@ def print_clients():
     for client in clients:
         print(client['username'])
 
+# just fetch a particular user's emails
 def fetch_mails(user):
     mails = '---------------'
     client = find_user(user)
@@ -165,12 +168,13 @@ def fetch_mails(user):
     
     return mails
 
-
+# actual mail server implementation
 def run_mail_server():
     try:
         current_num_clients = 0
         mail_id = 0
         
+        # run the thread which constantly works on putting mails into mailboxes
         thread = threading.Thread(target = put_mails_into_inboxes, args=())
         thread.start()
 
@@ -197,6 +201,7 @@ def run_mail_server():
                                 user = data_received['to']
                                 
                                 match command:
+                                    # in case a peer receives a mail
                                     case 'receive_mail':    
 
                                         from_user = data_received['from']
@@ -213,7 +218,7 @@ def run_mail_server():
                                             output_message_queue.put_nowait(mail)
                                         else:
                                             print('Client will have to wait; Queue is full')
-
+                                    # check whether the peer has the client and reply appropriately
                                     case 'is_user_connected':
                                         reply = ''
                                         if find_user(user):
@@ -223,7 +228,7 @@ def run_mail_server():
 
                                         my_reply = {'to': user , 'command': 'query_response', 'reply': reply, 'mail_id': data_received['mail_id']}
                                         server_socket.sendto(str.encode(json.dumps(my_reply)), addr)                                            
-
+                                    # received a query response for the query I sent when I received a mail
                                     case 'query_response':
                                         # dequeue the mails that wanted 
                                         reply = data_received['reply']
@@ -232,7 +237,7 @@ def run_mail_server():
                                             mail_to_send = dequeue_mail(id)
                                             if mail_to_send:
                                                 mail_to_send['command'] = 'receive_mail'
-
+                                                # if the reply was yes send the email to that mail server
                                                 server_socket.sendto(str.encode(json.dumps(mail_to_send)), addr)                                            
                                             else:
                                                 print('no mail to send')
@@ -265,6 +270,8 @@ def run_mail_server():
 
                             if user and command:
                                 match command:
+
+                                    # received a new connection, add the user
                                     case 'my_username':
                                         add_username(source, user, current_num_clients)
 
@@ -272,6 +279,8 @@ def run_mail_server():
                                         print("client has quit")
                                         source.close()
                                         inputs.remove(source)
+
+                                    # client wants to send the mail
                                     case 'send_mail':
                                         
                                         mail = decode_data['mail']
@@ -281,6 +290,7 @@ def run_mail_server():
                                         if mail:
                                             print(mail)
                                             to_user = find_user(mail['to'])
+                                            # check if I have the mail recipient connected 
                                             if to_user:
                                                 if not output_message_queue.full():
                                                     print('Mail has been received: ')
@@ -289,13 +299,15 @@ def run_mail_server():
                                                 else:
                                                     print('Queue is full')
                                             else:
+                                                # else put it in the queue
                                                 input_mails.append(mail)
-
-                                                for peer in peers:
+                                                
+                                                # and then see which peer has that user connected
+                                                for peer in peers:  
                                                     addrtuple = (peer[0], peer[1])
                                                     is_client_connected = {'to': mail['to'], 'command': 'is_user_connected', 'mail_id': mail_id}
                                                     server_socket.sendto(str.encode(json.dumps(is_client_connected)), addrtuple)
-
+                                    # fetch the emails
                                     case 'pull_mails':     
                                         data_send = fetch_mails(user)
                                         source.send(str.encode(data_send))
@@ -310,7 +322,8 @@ def run_mail_server():
 
             # cleanup all sockets after server crashes
             except KeyboardInterrupt:
-                print("I guess I'll just die")
+                print("Server exiting ")
+                # clean all the sockets
                 for clientSocket in inputs:
                     if((clientSocket is not local_socket) and (clientSocket is not server_socket)):
                         clientSocket.close()
@@ -319,17 +332,10 @@ def run_mail_server():
                 local_socket.close()
                 sys.exit(0)  # exit the program
             except Exception as e:
-                print(sys.exc_info()[2].tb_lineno)
-                print("SOMETHING IS BAD, check your message!!")
                 print(e)
 
-    # hopefully not get here
-    except KeyboardInterrupt:
-        print("How did i get here!!")
-        pass
     except Exception as e:
-        print("SOMETHING IS BAD....Here!!!!")
-        print(sys.exc_info()[2].tb_lineno)
+        print(e)
     # unregister the service
     finally:
         print("Unregistering...")
@@ -337,6 +343,7 @@ def run_mail_server():
         zeroconf.close()
         global stop_thread
         stop_thread = True
+        # kill the thread
         thread.join()
 
 
